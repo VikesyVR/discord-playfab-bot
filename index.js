@@ -9,9 +9,9 @@ import {
 } from "discord.js";
 import PlayFab from "playfab-sdk";
 
-// ======================
-// ENV VALIDATION
-// ======================
+/* ===============================
+   ENV VALIDATION
+================================ */
 const {
   DISCORD_TOKEN,
   CLIENT_ID,
@@ -21,148 +21,134 @@ const {
   CURRENCY_CODE
 } = process.env;
 
-if (!DISCORD_TOKEN || !CLIENT_ID || !PLAYFAB_TITLE_ID || !PLAYFAB_SECRET_KEY) {
+if (
+  !DISCORD_TOKEN ||
+  !CLIENT_ID ||
+  !PLAYFAB_TITLE_ID ||
+  !PLAYFAB_SECRET_KEY
+) {
   throw new Error("Missing required environment variables");
 }
 
-// ======================
-// PLAYFAB SETUP
-// ======================
+/* ===============================
+   PLAYFAB SETUP
+================================ */
 PlayFab.settings.titleId = PLAYFAB_TITLE_ID;
 PlayFab.settings.developerSecretKey = PLAYFAB_SECRET_KEY;
 
-// ======================
-// DISCORD CLIENT
-// ======================
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
-});
-
-// ======================
-// EXPRESS (RAILWAY NEEDS THIS)
-// ======================
+/* ===============================
+   EXPRESS (RAILWAY KEEP-ALIVE)
+================================ */
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.get("/", (_, res) => res.send("Bot is running ✅"));
+app.listen(PORT, () =>
+  console.log("Server running on port", PORT)
+);
 
-app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+/* ===============================
+   DISCORD CLIENT
+================================ */
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds]
 });
 
-// ======================
-// SLASH COMMANDS
-// ======================
+/* ===============================
+   SLASH COMMAND DEFINITIONS
+================================ */
 const commands = [
   new SlashCommandBuilder()
     .setName("link")
     .setDescription("Link your PlayFab account")
-    .addStringOption(opt =>
-      opt.setName("code")
+    .addStringOption(option =>
+      option
+        .setName("code")
         .setDescription("Code from the game")
         .setRequired(true)
     ),
+
   new SlashCommandBuilder()
     .setName("daily")
     .setDescription("Claim your daily reward")
 ].map(cmd => cmd.toJSON());
 
-// ======================
-// REGISTER COMMANDS (ON START)
-// ======================
+/* ===============================
+   REGISTER SLASH COMMANDS
+================================ */
 const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
 
 (async () => {
-  await rest.put(
-    Routes.applicationCommands(CLIENT_ID),
-    { body: commands }
-  );
-  console.log("Slash commands registered");
+  try {
+    await rest.put(
+      Routes.applicationCommands(CLIENT_ID),
+      { body: commands }
+    );
+    console.log("Slash commands registered");
+  } catch (err) {
+    console.error("Failed to register commands:", err);
+  }
 })();
 
-// ======================
-// BOT READY
-// ======================
+/* ===============================
+   BOT READY
+================================ */
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
 
-// ======================
-// INTERACTIONS
-// ======================
+/* ===============================
+   INTERACTIONS
+================================ */
 client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  // -------- /link --------
+  /* -------- /link -------- */
   if (interaction.commandName === "link") {
-    const code = interaction.options.getString("code");
-    const discordId = interaction.user.id;
+    await interaction.deferReply({ ephemeral: true });
 
-    PlayFab.Admin.GetPlayersInSegment({
-      SegmentId: "all_players"
-    }, () => {
-      PlayFab.Admin.GetUserData({
-        PlayFabId: null
-      });
-    });
+    try {
+      const code = interaction.options.getString("code");
+      const discordId = interaction.user.id;
 
-    PlayFab.Admin.GetUserDataByKeys = PlayFab.Admin.GetUserDataByKeys || PlayFab.Admin.GetUserData;
+      // TEMP CONFIRMATION (PIPELINE TEST)
+      // This confirms Discord → Railway → Bot works perfectly
+      await interaction.editReply(
+        `✅ Link request received.\n\n` +
+        `**Code:** ${code}\n` +
+        `**Discord ID:** ${discordId}\n\n` +
+        `Next step: connect this to PlayFab CloudScript.`
+      );
 
-    PlayFab.Admin.GetUserDataByKeys(
-      { Keys: ["DiscordLinkCode", "DiscordLinkExpires"] },
-      result => {
-        const match = Object.entries(result.Data || {}).find(
-          ([_, v]) => v.Value === code
-        );
-
-        if (!match) {
-          return interaction.reply({
-            content: "❌ Invalid or expired code",
-            ephemeral: true
-          });
-        }
-      }
-    );
-
-    // Safer approach: CloudScript / Search (recommended)
-    return interaction.reply({
-      content: "⚠️ Linking logic should be done via CloudScript (next step)",
-      ephemeral: true
-    });
+    } catch (err) {
+      console.error(err);
+      await interaction.editReply("❌ Failed to process link command.");
+    }
   }
 
-  // -------- /daily --------
+  /* -------- /daily -------- */
   if (interaction.commandName === "daily") {
-    const discordId = interaction.user.id;
+    await interaction.deferReply({ ephemeral: true });
 
-    PlayFab.Admin.GetAccountInfo(
-      { TitleDisplayName: discordId },
-      result => {
-        if (!result.AccountInfo) {
-          return interaction.reply({
-            content: "❌ Your account is not linked",
-            ephemeral: true
-          });
-        }
+    try {
+      const reward = parseInt(DAILY_REWARD || "100");
+      const currency = CURRENCY_CODE || "PP";
 
-        PlayFab.Admin.AddUserVirtualCurrency(
-          {
-            PlayFabId: result.AccountInfo.PlayFabId,
-            VirtualCurrency: CURRENCY_CODE,
-            Amount: parseInt(DAILY_REWARD)
-          },
-          () => {
-            interaction.reply(
-              `🎉 You received ${DAILY_REWARD} ${CURRENCY_CODE}!`
-            );
-          }
-        );
-      }
-    );
+      // TEMP CONFIRMATION
+      await interaction.editReply(
+        `🎉 Daily reward claimed!\n` +
+        `You would receive **${reward} ${currency}**.\n\n` +
+        `Next step: enforce PlayFab cooldown + currency grant.`
+      );
+
+    } catch (err) {
+      console.error(err);
+      await interaction.editReply("❌ Failed to claim daily reward.");
+    }
   }
 });
 
-// ======================
-// LOGIN BOT
-// ======================
+/* ===============================
+   LOGIN BOT
+================================ */
 client.login(DISCORD_TOKEN);
