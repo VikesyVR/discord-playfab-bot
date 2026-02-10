@@ -16,15 +16,12 @@ PlayFab.settings.titleId = process.env.PLAYFAB_TITLE_ID;
 PlayFab.settings.developerSecretKey = process.env.PLAYFAB_SECRET_KEY;
 
 /* ===============================
-   EXPRESS (RAILWAY KEEP-ALIVE)
+   EXPRESS (RAILWAY)
 ================================ */
 const app = express();
 const PORT = process.env.PORT || 3000;
-
 app.get("/", (_, res) => res.send("OK"));
-app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
-});
+app.listen(PORT, () => console.log("Server running on port", PORT));
 
 /* ===============================
    DISCORD CLIENT
@@ -40,41 +37,60 @@ const commands = [
   new SlashCommandBuilder()
     .setName("link")
     .setDescription("Link your game account to Discord")
-    .addStringOption(option =>
-      option
-        .setName("code")
+    .addStringOption(o =>
+      o.setName("code")
         .setDescription("The code shown in-game")
         .setRequired(true)
     ),
-
   new SlashCommandBuilder()
     .setName("daily")
     .setDescription("Claim your daily reward")
-].map(cmd => cmd.toJSON());
+].map(c => c.toJSON());
 
-/* ===============================
-   REGISTER COMMANDS
-================================ */
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
+await rest.put(
+  Routes.applicationCommands(process.env.CLIENT_ID),
+  { body: commands }
+);
 
-(async () => {
-  try {
-    await rest.put(
-      Routes.applicationCommands(process.env.CLIENT_ID),
-      { body: commands }
-    );
-    console.log("Slash commands registered");
-  } catch (err) {
-    console.error("Failed to register commands:", err);
-  }
-})();
-
-/* ===============================
-   READY
-================================ */
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}`);
 });
+
+/* ===============================
+   SAFE PLAYFAB WRAPPER
+================================ */
+function executeCloudScriptSafe(functionName, params, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    let finished = false;
+
+    const timer = setTimeout(() => {
+      if (!finished) {
+        finished = true;
+        resolve({ timeout: true });
+      }
+    }, timeoutMs);
+
+    PlayFab.Server.ExecuteCloudScript(
+      {
+        FunctionName: functionName,
+        FunctionParameter: params
+      },
+      result => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        resolve({ result: result.FunctionResult });
+      },
+      error => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        resolve({ error });
+      }
+    );
+  });
+}
 
 /* ===============================
    INTERACTIONS
@@ -82,87 +98,67 @@ client.once("ready", () => {
 client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  /* ===============================
-     /link
-  ================================ */
+  /* ---------- /link ---------- */
   if (interaction.commandName === "link") {
-    await interaction.deferReply();
+    await interaction.reply("🔗 Linking your account…");
 
-    let replied = false;
-
-    const timeout = setTimeout(() => {
-      if (!replied) {
-        replied = true;
-        interaction.editReply("❌ Linking timed out. Please try again.");
-      }
-    }, 3000);
-
-    PlayFab.Server.ExecuteCloudScript(
+    const response = await executeCloudScriptSafe(
+      "LinkDiscordAccount",
       {
-        FunctionName: "LinkDiscordAccount",
-        FunctionParameter: {
-          code: interaction.options.getString("code"),
-          discordId: interaction.user.id
-        }
-      },
-      result => {
-        if (replied) return;
-        replied = true;
-        clearTimeout(timeout);
-
-        const r = result?.FunctionResult;
-
-        if (r?.success) {
-          interaction.editReply(`✅ ${interaction.user} your account is now linked!`);
-        } else {
-          interaction.editReply(`❌ ${r?.message || "Link failed"}`);
-        }
+        code: interaction.options.getString("code"),
+        discordId: interaction.user.id
       }
     );
+
+    if (response.timeout) {
+      await interaction.editReply("❌ Linking timed out. Try again.");
+      return;
+    }
+
+    if (response.error) {
+      await interaction.editReply("❌ PlayFab error. Try again.");
+      return;
+    }
+
+    if (response.result?.success) {
+      await interaction.editReply(`✅ ${interaction.user} linked successfully!`);
+    } else {
+      await interaction.editReply(`❌ ${response.result?.message || "Invalid code"}`);
+    }
   }
 
-  /* ===============================
-     /daily
-  ================================ */
+  /* ---------- /daily ---------- */
   if (interaction.commandName === "daily") {
-    await interaction.deferReply();
+    await interaction.reply("🎁 Checking your daily reward…");
 
-    let replied = false;
-
-    const timeout = setTimeout(() => {
-      if (!replied) {
-        replied = true;
-        interaction.editReply("❌ Request timed out. Try again.");
-      }
-    }, 3000);
-
-    PlayFab.Server.ExecuteCloudScript(
-      {
-        FunctionName: "DailyReward",
-        FunctionParameter: {
-          discordId: interaction.user.id
-        }
-      },
-      result => {
-        if (replied) return;
-        replied = true;
-        clearTimeout(timeout);
-
-        const r = result?.FunctionResult;
-
-        if (!r?.success) {
-          if (r?.remainingMs) {
-            const mins = Math.ceil(r.remainingMs / 60000);
-            interaction.editReply(`⏳ ${interaction.user} come back in **${mins} minutes**`);
-          } else {
-            interaction.editReply("❌ You must link your account first.");
-          }
-          return;
-        }
-
-        interaction.editReply(`🎉 ${interaction.user} received **${r.reward} PP**!`);
-      }
+    const response = await executeCloudScriptSafe(
+      "DailyReward",
+      { discordId: interaction.user.id }
     );
+
+    if (response.timeout) {
+      await interaction.editReply("❌ Request timed out. Try again.");
+      return;
+    }
+
+    if (response.error) {
+      await interaction.editReply("❌ PlayFab error. Try again.");
+      return;
+    }
+
+    const r = response.result;
+
+    if (!r?.success) {
+      if (r?.remainingMs) {
+        const mins = Math.ceil(r.remainingMs / 60000);
+        await interaction.editReply(`⏳ ${interaction.user} come back in **${mins} minutes**`);
+      } else {
+        await interaction.editReply("❌ You must link your account first.");
+      }
+      return;
+    }
+
+    await interaction.editReply(`🎉 ${interaction.user} received **${r.reward} PP**!`);
   }
 });
 
