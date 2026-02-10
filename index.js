@@ -37,7 +37,12 @@ client.on("interactionCreate", async i => {
 
   // 🔗 LINK
   if (i.commandName === "link") {
-    await i.deferReply(); // PUBLIC
+    await i.deferReply();
+
+    let finished = false;
+    const timeout = setTimeout(() => {
+      if (!finished) i.editReply("❌ Linking timed out. Try again.");
+    }, 2500);
 
     PlayFab.Server.ExecuteCloudScript({
       FunctionName: "LinkDiscordAccount",
@@ -46,10 +51,13 @@ client.on("interactionCreate", async i => {
         discordId: i.user.id
       }
     }, res => {
-      if (res.FunctionResult.success) {
+      finished = true;
+      clearTimeout(timeout);
+
+      if (res?.FunctionResult?.success) {
         i.editReply(`✅ ${i.user} your Discord is now linked!`);
       } else {
-        i.editReply(`❌ ${res.FunctionResult.message}`);
+        i.editReply(`❌ ${res?.FunctionResult?.message || "Link failed"}`);
       }
     });
   }
@@ -58,14 +66,10 @@ client.on("interactionCreate", async i => {
   if (i.commandName === "daily") {
     await i.deferReply();
 
-    PlayFab.Server.GetUserData({
-      PlayFabId: i.user.id
-    }, () => {});
-
     PlayFab.Server.ExecuteCloudScript({
       FunctionName: "DailyReward",
       FunctionParameter: {
-        playFabId: i.user.id
+        playFabId: i.user.id // resolved via linked DiscordId
       }
     }, res => {
       const r = res.FunctionResult;
