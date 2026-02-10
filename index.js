@@ -10,16 +10,17 @@ import {
 import PlayFab from "playfab-sdk";
 
 /* ===============================
-   PLAYFAB SETUP
+   PLAYFAB CONFIG
 ================================ */
 PlayFab.settings.titleId = process.env.PLAYFAB_TITLE_ID;
 PlayFab.settings.developerSecretKey = process.env.PLAYFAB_SECRET_KEY;
 
 /* ===============================
-   EXPRESS (KEEP RAILWAY ALIVE)
+   EXPRESS (RAILWAY KEEP-ALIVE)
 ================================ */
 const app = express();
 const PORT = process.env.PORT || 3000;
+
 app.get("/", (_, res) => res.send("OK"));
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
@@ -33,8 +34,7 @@ const client = new Client({
 });
 
 /* ===============================
-   SLASH COMMANDS (FIXED)
-   ⚠️ DESCRIPTIONS ARE REQUIRED
+   SLASH COMMANDS
 ================================ */
 const commands = [
   new SlashCommandBuilder()
@@ -70,7 +70,7 @@ const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 })();
 
 /* ===============================
-   BOT READY
+   READY
 ================================ */
 client.once("ready", () => {
   console.log(`Logged in as ${client.user.tag}`);
@@ -82,17 +82,20 @@ client.once("ready", () => {
 client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  /* ---------- /link ---------- */
+  /* ===============================
+     /link
+  ================================ */
   if (interaction.commandName === "link") {
     await interaction.deferReply();
 
-    let finished = false;
+    let replied = false;
+
     const timeout = setTimeout(() => {
-      if (!finished) {
-        finished = true;
+      if (!replied) {
+        replied = true;
         interaction.editReply("❌ Linking timed out. Please try again.");
       }
-    }, 2500);
+    }, 3000);
 
     PlayFab.Server.ExecuteCloudScript(
       {
@@ -102,25 +105,36 @@ client.on("interactionCreate", async interaction => {
           discordId: interaction.user.id
         }
       },
-      res => {
-        if (finished) return;
-        finished = true;
+      result => {
+        if (replied) return;
+        replied = true;
         clearTimeout(timeout);
 
-        if (res?.FunctionResult?.success) {
-          interaction.editReply(`✅ ${interaction.user} your Discord is now linked!`);
+        const r = result?.FunctionResult;
+
+        if (r?.success) {
+          interaction.editReply(`✅ ${interaction.user} your account is now linked!`);
         } else {
-          interaction.editReply(
-            `❌ ${res?.FunctionResult?.message || "Link failed"}`
-          );
+          interaction.editReply(`❌ ${r?.message || "Link failed"}`);
         }
       }
     );
   }
 
-  /* ---------- /daily ---------- */
+  /* ===============================
+     /daily
+  ================================ */
   if (interaction.commandName === "daily") {
     await interaction.deferReply();
+
+    let replied = false;
+
+    const timeout = setTimeout(() => {
+      if (!replied) {
+        replied = true;
+        interaction.editReply("❌ Request timed out. Try again.");
+      }
+    }, 3000);
 
     PlayFab.Server.ExecuteCloudScript(
       {
@@ -129,24 +143,24 @@ client.on("interactionCreate", async interaction => {
           discordId: interaction.user.id
         }
       },
-      res => {
-        const r = res?.FunctionResult;
+      result => {
+        if (replied) return;
+        replied = true;
+        clearTimeout(timeout);
+
+        const r = result?.FunctionResult;
 
         if (!r?.success) {
           if (r?.remainingMs) {
             const mins = Math.ceil(r.remainingMs / 60000);
-            interaction.editReply(
-              `⏳ ${interaction.user} come back in **${mins} minutes**`
-            );
+            interaction.editReply(`⏳ ${interaction.user} come back in **${mins} minutes**`);
           } else {
             interaction.editReply("❌ You must link your account first.");
           }
           return;
         }
 
-        interaction.editReply(
-          `🎉 ${interaction.user} received **${r.reward} PP**!`
-        );
+        interaction.editReply(`🎉 ${interaction.user} received **${r.reward} PP**!`);
       }
     );
   }
