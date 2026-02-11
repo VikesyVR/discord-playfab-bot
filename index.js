@@ -10,7 +10,7 @@ import {
 } from "discord.js";
 
 /* ===============================
-   EXPRESS (RAILWAY KEEP-ALIVE)
+   KEEP ALIVE (Railway)
 ================================ */
 const app = express();
 app.get("/", (_, res) => res.send("OK"));
@@ -35,7 +35,6 @@ const commands = [
         .setDescription("The code shown in-game")
         .setRequired(true)
     ),
-
   new SlashCommandBuilder()
     .setName("daily")
     .setDescription("Claim your daily reward")
@@ -53,7 +52,7 @@ client.once("ready", () => {
 });
 
 /* ===============================
-   CLOUDSCRIPT CALL (REST VERSION)
+   EXECUTE CLOUDSCRIPT
 ================================ */
 async function callCloudScript(functionName, params) {
   try {
@@ -71,15 +70,13 @@ async function callCloudScript(functionName, params) {
       }
     );
 
-    return {
-      result: response.data.data.FunctionResult
-    };
+    return response.data.data.FunctionResult;
 
   } catch (err) {
     console.error("CloudScript error:",
       err.response?.data || err.message
     );
-    return { error: true };
+    return null;
   }
 }
 
@@ -102,11 +99,9 @@ async function grantCurrency(playFabId, amount) {
         }
       }
     );
-
     return true;
-
   } catch (err) {
-    console.error("Admin grant error:",
+    console.error("Admin error:",
       err.response?.data || err.message
     );
     return false;
@@ -119,59 +114,54 @@ async function grantCurrency(playFabId, amount) {
 client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  /* =======================
-     LINK COMMAND
-  ======================= */
+  // LINK COMMAND
   if (interaction.commandName === "link") {
 
     await interaction.reply("🔗 Linking your account...");
 
-    const res = await callCloudScript("LinkDiscordAccount", {
+    const result = await callCloudScript("LinkDiscordAccount", {
       code: interaction.options.getString("code"),
       discordId: interaction.user.id
     });
 
-    if (res.error)
+    if (!result)
       return interaction.editReply("❌ PlayFab error.");
 
-    if (res.result?.success)
+    if (result.success)
       return interaction.editReply(
         `✅ ${interaction.user} linked successfully!`
       );
 
     return interaction.editReply(
-      `❌ ${res.result?.message || "Invalid or expired code"}`
+      `❌ ${result.message}`
     );
   }
 
-  /* =======================
-     DAILY COMMAND
-  ======================= */
+  // DAILY COMMAND
   if (interaction.commandName === "daily") {
 
     await interaction.reply("🎁 Checking your daily reward...");
 
-    const res = await callCloudScript("ResolveDaily", {
+    const result = await callCloudScript("ResolveDaily", {
       discordId: interaction.user.id
     });
 
-    if (res.error)
+    if (!result)
       return interaction.editReply("❌ PlayFab error.");
 
-    const r = res.result;
+    if (!result.success) {
 
-    if (!r?.success) {
-      if (r?.remainingMs) {
-        const mins = Math.ceil(r.remainingMs / 60000);
+      if (result.remainingMs) {
+        const mins = Math.ceil(result.remainingMs / 60000);
         return interaction.editReply(
           `⏳ ${interaction.user} come back in **${mins} minutes**`
         );
       }
 
-      return interaction.editReply("❌ You must link your account first.");
+      return interaction.editReply("❌ You must link first.");
     }
 
-    const granted = await grantCurrency(r.playFabId, 100);
+    const granted = await grantCurrency(result.playFabId, 100);
 
     if (!granted)
       return interaction.editReply("❌ Currency grant failed.");
@@ -182,7 +172,4 @@ client.on("interactionCreate", async interaction => {
   }
 });
 
-/* ===============================
-   LOGIN
-================================ */
 client.login(process.env.DISCORD_TOKEN);
