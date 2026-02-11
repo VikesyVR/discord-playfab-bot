@@ -9,15 +9,9 @@ import {
   SlashCommandBuilder
 } from "discord.js";
 
-import * as PlayFabServer from "playfab-sdk/Scripts/PlayFab/PlayFabServerApi.js";
-import PlayFabSettings from "playfab-sdk/Scripts/PlayFab/PlayFabSettings.js";
-
 /* ===============================
-   CONFIG
+   EXPRESS (RAILWAY KEEP-ALIVE)
 ================================ */
-PlayFabSettings.titleId = process.env.PLAYFAB_TITLE_ID;
-PlayFabSettings.developerSecretKey = process.env.PLAYFAB_SECRET_KEY;
-
 const app = express();
 app.get("/", (_, res) => res.send("OK"));
 app.listen(process.env.PORT || 3000);
@@ -41,6 +35,7 @@ const commands = [
         .setDescription("The code shown in-game")
         .setRequired(true)
     ),
+
   new SlashCommandBuilder()
     .setName("daily")
     .setDescription("Claim your daily reward")
@@ -58,55 +53,64 @@ client.once("ready", () => {
 });
 
 /* ===============================
-   SAFE CLOUDSCRIPT CALL
+   CLOUDSCRIPT CALL (REST VERSION)
 ================================ */
-function callCloudScript(name, params, timeout = 5000) {
-  return new Promise(resolve => {
-    let finished = false;
-
-    const timer = setTimeout(() => {
-      if (!finished) {
-        finished = true;
-        resolve({ timeout: true });
-      }
-    }, timeout);
-
-    PlayFabServer.ExecuteCloudScript(
-      { FunctionName: name, FunctionParameter: params },
-      result => {
-        if (finished) return;
-        finished = true;
-        clearTimeout(timer);
-        resolve({ result: result.data.FunctionResult });
+async function callCloudScript(functionName, params) {
+  try {
+    const response = await axios.post(
+      `https://${process.env.PLAYFAB_TITLE_ID}.playfabapi.com/Server/ExecuteCloudScript`,
+      {
+        FunctionName: functionName,
+        FunctionParameter: params
       },
-      error => {
-        if (finished) return;
-        finished = true;
-        clearTimeout(timer);
-        resolve({ error });
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "X-SecretKey": process.env.PLAYFAB_SECRET_KEY
+        }
       }
     );
-  });
+
+    return {
+      result: response.data.data.FunctionResult
+    };
+
+  } catch (err) {
+    console.error("CloudScript error:",
+      err.response?.data || err.message
+    );
+    return { error: true };
+  }
 }
 
 /* ===============================
-   ADMIN GRANT
+   ADMIN GRANT CURRENCY
 ================================ */
 async function grantCurrency(playFabId, amount) {
-  return axios.post(
-    `https://${process.env.PLAYFAB_TITLE_ID}.playfabapi.com/Admin/AddUserVirtualCurrency`,
-    {
-      PlayFabId: playFabId,
-      VirtualCurrency: "PP",
-      Amount: amount
-    },
-    {
-      headers: {
-        "Content-Type": "application/json",
-        "X-SecretKey": process.env.PLAYFAB_SECRET_KEY
+  try {
+    await axios.post(
+      `https://${process.env.PLAYFAB_TITLE_ID}.playfabapi.com/Admin/AddUserVirtualCurrency`,
+      {
+        PlayFabId: playFabId,
+        VirtualCurrency: "PP",
+        Amount: amount
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "X-SecretKey": process.env.PLAYFAB_SECRET_KEY
+        }
       }
-    }
-  );
+    );
+
+    return true;
+
+  } catch (err) {
+    console.error("Admin grant error:",
+      err.response?.data || err.message
+    );
+    return false;
+  }
 }
 
 /* ===============================
@@ -115,7 +119,9 @@ async function grantCurrency(playFabId, amount) {
 client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  /* ===== LINK ===== */
+  /* =======================
+     LINK COMMAND
+  ======================= */
   if (interaction.commandName === "link") {
 
     await interaction.reply("🔗 Linking your account...");
@@ -125,19 +131,22 @@ client.on("interactionCreate", async interaction => {
       discordId: interaction.user.id
     });
 
-    if (res.timeout)
-      return interaction.editReply("❌ Linking timed out.");
-
     if (res.error)
       return interaction.editReply("❌ PlayFab error.");
 
     if (res.result?.success)
-      return interaction.editReply(`✅ ${interaction.user} linked successfully!`);
+      return interaction.editReply(
+        `✅ ${interaction.user} linked successfully!`
+      );
 
-    return interaction.editReply(`❌ ${res.result?.message || "Invalid code"}`);
+    return interaction.editReply(
+      `❌ ${res.result?.message || "Invalid or expired code"}`
+    );
   }
 
-  /* ===== DAILY ===== */
+  /* =======================
+     DAILY COMMAND
+  ======================= */
   if (interaction.commandName === "daily") {
 
     await interaction.reply("🎁 Checking your daily reward...");
@@ -145,9 +154,6 @@ client.on("interactionCreate", async interaction => {
     const res = await callCloudScript("ResolveDaily", {
       discordId: interaction.user.id
     });
-
-    if (res.timeout)
-      return interaction.editReply("❌ Request timed out.");
 
     if (res.error)
       return interaction.editReply("❌ PlayFab error.");
@@ -161,18 +167,22 @@ client.on("interactionCreate", async interaction => {
           `⏳ ${interaction.user} come back in **${mins} minutes**`
         );
       }
+
       return interaction.editReply("❌ You must link your account first.");
     }
 
-    try {
-      await grantCurrency(r.playFabId, 100);
-      return interaction.editReply(
-        `🎉 ${interaction.user} received **100 PP**!`
-      );
-    } catch (e) {
+    const granted = await grantCurrency(r.playFabId, 100);
+
+    if (!granted)
       return interaction.editReply("❌ Currency grant failed.");
-    }
+
+    return interaction.editReply(
+      `🎉 ${interaction.user} received **100 PP**!`
+    );
   }
 });
 
+/* ===============================
+   LOGIN
+================================ */
 client.login(process.env.DISCORD_TOKEN);
