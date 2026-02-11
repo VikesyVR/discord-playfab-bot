@@ -7,13 +7,15 @@ import {
   Routes,
   SlashCommandBuilder
 } from "discord.js";
-import PlayFab from "playfab-sdk";
+
+import * as PlayFabServer from "playfab-sdk/Scripts/PlayFab/PlayFabServerApi.js";
+import PlayFabSettings from "playfab-sdk/Scripts/PlayFab/PlayFabSettings.js";
 
 /* ===============================
    PLAYFAB CONFIG
 ================================ */
-PlayFab.settings.titleId = process.env.PLAYFAB_TITLE_ID;
-PlayFab.settings.developerSecretKey = process.env.PLAYFAB_SECRET_KEY;
+PlayFabSettings.titleId = process.env.PLAYFAB_TITLE_ID;
+PlayFabSettings.developerSecretKey = process.env.PLAYFAB_SECRET_KEY;
 
 /* ===============================
    EXPRESS (RAILWAY)
@@ -58,10 +60,10 @@ client.once("ready", () => {
 });
 
 /* ===============================
-   SAFE PLAYFAB WRAPPER
+   SAFE CLOUDSCRIPT CALL
 ================================ */
-function executeCloudScriptSafe(functionName, params, timeoutMs = 3000) {
-  return new Promise((resolve) => {
+function executeCloudScriptSafe(functionName, params, timeoutMs = 5000) {
+  return new Promise(resolve => {
     let finished = false;
 
     const timer = setTimeout(() => {
@@ -71,7 +73,7 @@ function executeCloudScriptSafe(functionName, params, timeoutMs = 3000) {
       }
     }, timeoutMs);
 
-    PlayFab.Server.ExecuteCloudScript(
+    PlayFabServer.ExecuteCloudScript(
       {
         FunctionName: functionName,
         FunctionParameter: params
@@ -80,7 +82,7 @@ function executeCloudScriptSafe(functionName, params, timeoutMs = 3000) {
         if (finished) return;
         finished = true;
         clearTimeout(timer);
-        resolve({ result: result.FunctionResult });
+        resolve({ result: result.data.FunctionResult });
       },
       error => {
         if (finished) return;
@@ -98,11 +100,10 @@ function executeCloudScriptSafe(functionName, params, timeoutMs = 3000) {
 client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  /* ---------- /link ---------- */
   if (interaction.commandName === "link") {
     await interaction.reply("🔗 Linking your account…");
 
-    const response = await executeCloudScriptSafe(
+    const res = await executeCloudScriptSafe(
       "LinkDiscordAccount",
       {
         code: interaction.options.getString("code"),
@@ -110,43 +111,44 @@ client.on("interactionCreate", async interaction => {
       }
     );
 
-    if (response.timeout) {
-      await interaction.editReply("❌ Linking timed out. Try again.");
+    if (res.timeout) {
+      await interaction.editReply("❌ Linking timed out.");
       return;
     }
 
-    if (response.error) {
-      await interaction.editReply("❌ PlayFab error. Try again.");
+    if (res.error) {
+      console.error(res.error);
+      await interaction.editReply("❌ PlayFab error.");
       return;
     }
 
-    if (response.result?.success) {
+    if (res.result?.success) {
       await interaction.editReply(`✅ ${interaction.user} linked successfully!`);
     } else {
-      await interaction.editReply(`❌ ${response.result?.message || "Invalid code"}`);
+      await interaction.editReply(`❌ ${res.result?.message || "Invalid code"}`);
     }
   }
 
-  /* ---------- /daily ---------- */
   if (interaction.commandName === "daily") {
     await interaction.reply("🎁 Checking your daily reward…");
 
-    const response = await executeCloudScriptSafe(
+    const res = await executeCloudScriptSafe(
       "DailyReward",
       { discordId: interaction.user.id }
     );
 
-    if (response.timeout) {
-      await interaction.editReply("❌ Request timed out. Try again.");
+    if (res.timeout) {
+      await interaction.editReply("❌ Request timed out.");
       return;
     }
 
-    if (response.error) {
-      await interaction.editReply("❌ PlayFab error. Try again.");
+    if (res.error) {
+      console.error(res.error);
+      await interaction.editReply("❌ PlayFab error.");
       return;
     }
 
-    const r = response.result;
+    const r = res.result;
 
     if (!r?.success) {
       if (r?.remainingMs) {
