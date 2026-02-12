@@ -14,11 +14,12 @@ const {
   CLIENT_ID,
   PLAYFAB_TITLE_ID,
   PLAYFAB_SECRET_KEY,
+  PLAYFAB_SEGMENT_ID,
   CURRENCY_CODE,
   DAILY_REWARD
 } = process.env
 
-if (!DISCORD_TOKEN || !CLIENT_ID || !PLAYFAB_TITLE_ID || !PLAYFAB_SECRET_KEY) {
+if (!DISCORD_TOKEN || !CLIENT_ID || !PLAYFAB_TITLE_ID || !PLAYFAB_SECRET_KEY || !PLAYFAB_SEGMENT_ID) {
   console.error("Missing environment variables.")
   process.exit(1)
 }
@@ -56,6 +57,28 @@ client.once('clientReady', () => {
   console.log(`Logged in as ${client.user.tag}`)
 })
 
+async function getAllPlayersWithData() {
+  console.log("Using Segment ID:", PLAYFAB_SEGMENT_ID)
+
+  const response = await axios.post(
+    `https://${PLAYFAB_TITLE_ID}.playfabapi.com/Admin/GetPlayersInSegment`,
+    {
+      SegmentId: PLAYFAB_SEGMENT_ID,
+      ProfileConstraints: {
+        ShowData: true
+      }
+    },
+    {
+      headers: {
+        "X-SecretKey": PLAYFAB_SECRET_KEY,
+        "Content-Type": "application/json"
+      }
+    }
+  )
+
+  return response.data.data.PlayerProfiles
+}
+
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return
 
@@ -65,34 +88,18 @@ client.on('interactionCreate', async interaction => {
     const code = interaction.options.getString('code')
 
     try {
-      // SEARCH PLAYER BY DiscordLinkCode
-      const segmentResponse = await axios.post(
-        `https://${PLAYFAB_TITLE_ID}.playfabapi.com/Admin/GetPlayersInSegment`,
-        {
-          SegmentId: "AllPlayers"
-        },
-        {
-          headers: {
-            "X-SecretKey": PLAYFAB_SECRET_KEY,
-            "Content-Type": "application/json"
-          }
-        }
+      const players = await getAllPlayersWithData()
+
+      const matched = players.find(p =>
+        p.Profile?.Data?.DiscordLinkCode?.Value === code
       )
 
-      const players = segmentResponse.data.data.PlayerProfiles
-
-      const matchedPlayer = players.find(p =>
-        p.PlayerProfile?.PlayerId &&
-        p.PlayerProfile?.Profile?.Data?.DiscordLinkCode?.Value === code
-      )
-
-      if (!matchedPlayer) {
+      if (!matched) {
         return interaction.editReply("❌ Invalid or expired code.")
       }
 
-      const playfabId = matchedPlayer.PlayerProfile.PlayerId
+      const playfabId = matched.PlayerId
 
-      // Save Discord ID
       await axios.post(
         `https://${PLAYFAB_TITLE_ID}.playfabapi.com/Admin/UpdateUserData`,
         {
@@ -110,7 +117,6 @@ client.on('interactionCreate', async interaction => {
       )
 
       await interaction.editReply(`✅ Account linked, ${interaction.user}!`)
-
     } catch (err) {
       console.error("LINK ERROR:", err.response?.data || err.message)
       await interaction.editReply("❌ PlayFab error.")
@@ -121,33 +127,18 @@ client.on('interactionCreate', async interaction => {
     await interaction.deferReply()
 
     try {
-      // Find player by DiscordId
-      const segmentResponse = await axios.post(
-        `https://${PLAYFAB_TITLE_ID}.playfabapi.com/Admin/GetPlayersInSegment`,
-        {
-          SegmentId: "AllPlayers"
-        },
-        {
-          headers: {
-            "X-SecretKey": PLAYFAB_SECRET_KEY,
-            "Content-Type": "application/json"
-          }
-        }
+      const players = await getAllPlayersWithData()
+
+      const matched = players.find(p =>
+        p.Profile?.Data?.DiscordId?.Value === interaction.user.id
       )
 
-      const players = segmentResponse.data.data.PlayerProfiles
-
-      const matchedPlayer = players.find(p =>
-        p.PlayerProfile?.Profile?.Data?.DiscordId?.Value === interaction.user.id
-      )
-
-      if (!matchedPlayer) {
+      if (!matched) {
         return interaction.editReply("❌ Account not linked.")
       }
 
-      const playfabId = matchedPlayer.PlayerProfile.PlayerId
+      const playfabId = matched.PlayerId
 
-      // Give currency
       await axios.post(
         `https://${PLAYFAB_TITLE_ID}.playfabapi.com/Admin/AddUserVirtualCurrency`,
         {
@@ -164,7 +155,6 @@ client.on('interactionCreate', async interaction => {
       )
 
       await interaction.editReply(`💰 ${interaction.user} received ${DAILY_REWARD} ${CURRENCY_CODE}!`)
-
     } catch (err) {
       console.error("DAILY ERROR:", err.response?.data || err.message)
       await interaction.editReply("❌ PlayFab error.")
@@ -179,7 +169,7 @@ async function start() {
 
 start()
 
-// Required for Railway
+// Railway health server
 const app = express()
 app.get('/', (req, res) => res.send("Bot Running"))
 app.listen(process.env.PORT || 8080)
